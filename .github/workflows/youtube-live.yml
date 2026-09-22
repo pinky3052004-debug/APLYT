@@ -248,7 +248,7 @@ jobs:
           PADDED_ID="$(printf '%05d' "$NEXT_ID")"
 
           VIDEO_FILE="${PADDED_ID}.mp4"
-          THUMB_FILE="${PADDED_ID}.webp"
+          THUMB_FILE="${PADDED_ID}.jpg"
 
           echo ""
           echo "Selected ID       : $NEXT_ID"
