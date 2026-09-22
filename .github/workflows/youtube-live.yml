@@ -1,0 +1,407 @@
+name: Sequential YouTube Live
+
+on:
+  workflow_dispatch:
+
+jobs:
+  youtube-live:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    env:
+      RCLONE_REMOTE: NanNanDrive
+      GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
+      YOUTUBE_STREAM_KEY: ${{ secrets.YOUTUBE_STREAM_KEY }}
+
+    steps:
+
+      # ==========================================
+      # CHECKOUT
+      # ==========================================
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ==========================================
+      # INSTALL TOOLS
+      # ==========================================
+      - name: Install tools
+        run: |
+          set -e
+
+          sudo apt-get update
+
+          sudo apt-get install -y \
+            ffmpeg \
+            curl \
+            unzip \
+            jq
+
+          echo "Installing rclone..."
+
+          curl https://rclone.org/install.sh | sudo bash
+
+          rclone version
+          ffmpeg -version
+
+      # ==========================================
+      # RESTORE RCLONE CONFIG
+      # ==========================================
+      - name: Restore rclone config
+        run: |
+          set -e
+
+          echo "=========================================="
+          echo "RESTORING RCLONE CONFIG"
+          echo "=========================================="
+
+          mkdir -p "$HOME/.config/rclone"
+
+          printf '%s' '${{ secrets.RCLONE_CONFIG }}' \
+            > "$HOME/.config/rclone/rclone.conf"
+
+          chmod 600 "$HOME/.config/rclone/rclone.conf"
+
+          echo "Rclone config restored."
+
+      # ==========================================
+      # TEST GOOGLE DRIVE
+      # ==========================================
+      - name: Test Google Drive
+        run: |
+          set -e
+
+          echo "=========================================="
+          echo "TESTING GOOGLE DRIVE"
+          echo "=========================================="
+
+          rclone lsd "${RCLONE_REMOTE}:" --max-depth 1
+
+          echo "Google Drive connection OK."
+
+      # ==========================================
+      # CREATE RECORD FILE
+      # ==========================================
+      - name: Prepare record file
+        run: |
+          if [ ! -f already_live.txt ]; then
+            touch already_live.txt
+          fi
+
+          echo "=========================================="
+          echo "ALREADY LIVE"
+          echo "=========================================="
+
+          cat already_live.txt || true
+
+      # ==========================================
+      # FIND NEXT VIDEO
+      # ==========================================
+      - name: Find next video
+        id: select
+        run: |
+          set -e
+
+          echo "=========================================="
+          echo "FINDING NEXT VIDEO"
+          echo "=========================================="
+
+          mkdir -p work
+
+          REMOTE="${RCLONE_REMOTE}:"
+
+          # ------------------------------------------
+          # List only MP4 files
+          # ------------------------------------------
+          rclone lsf "$REMOTE" \
+            --files-only \
+            --format "p" \
+            --include "*.mp4" \
+            > all_videos.txt
+
+          echo ""
+          echo "ALL VIDEOS:"
+          cat all_videos.txt || true
+
+          # ------------------------------------------
+          # Extract numeric filename
+          #
+          # 00001.mp4 -> 00001
+          # 00002.mp4 -> 00002
+          # ------------------------------------------
+
+          : > candidates.txt
+
+          while IFS= read -r FILE; do
+
+            BASENAME="$(basename "$FILE")"
+
+            if [[ "$BASENAME" =~ ^([0-9]+)\.mp4$ ]]; then
+
+              NUMBER="${BASH_REMATCH[1]}"
+
+              # --------------------------------------
+              # Check matching WEBP thumbnail
+              # --------------------------------------
+
+              THUMB="${BASENAME%.mp4}.webp"
+
+              if grep -Fxq "$THUMB" <(
+                rclone lsf "$REMOTE" \
+                  --files-only \
+                  --format "p" \
+                  --include "$THUMB"
+              ); then
+
+                echo "$NUMBER|$BASENAME|$THUMB" >> candidates.txt
+
+              else
+
+                echo "Missing thumbnail:"
+                echo "$THUMB"
+
+              fi
+
+            fi
+
+          done < all_videos.txt
+
+          echo ""
+          echo "=========================================="
+          echo "VALID VIDEO + THUMBNAIL PAIRS"
+          echo "=========================================="
+
+          cat candidates.txt || true
+
+          # ------------------------------------------
+          # Numeric sort
+          # ------------------------------------------
+
+          sort -t'|' -k1,1n candidates.txt > sorted_candidates.txt
+
+          # ------------------------------------------
+          # Find first video not already live
+          # ------------------------------------------
+
+          NEXT_NUMBER=""
+          NEXT_VIDEO=""
+          NEXT_THUMB=""
+
+          while IFS='|' read -r NUMBER VIDEO THUMB; do
+
+            if ! grep -Fxq "$NUMBER" already_live.txt; then
+
+              NEXT_NUMBER="$NUMBER"
+              NEXT_VIDEO="$VIDEO"
+              NEXT_THUMB="$THUMB"
+
+              break
+
+            fi
+
+          done < sorted_candidates.txt
+
+          # ------------------------------------------
+          # Nothing left
+          # ------------------------------------------
+
+          if [ -z "$NEXT_VIDEO" ]; then
+
+            echo ""
+            echo "=========================================="
+            echo "NO MORE VIDEOS"
+            echo "=========================================="
+
+            echo "has_next=false" >> "$GITHUB_OUTPUT"
+
+            exit 0
+
+          fi
+
+          echo ""
+          echo "=========================================="
+          echo "SELECTED"
+          echo "=========================================="
+
+          echo "Number     : $NEXT_NUMBER"
+          echo "Video      : $NEXT_VIDEO"
+          echo "Thumbnail  : $NEXT_THUMB"
+
+          echo "has_next=true" >> "$GITHUB_OUTPUT"
+          echo "number=$NEXT_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "video=$NEXT_VIDEO" >> "$GITHUB_OUTPUT"
+          echo "thumbnail=$NEXT_THUMB" >> "$GITHUB_OUTPUT"
+
+      # ==========================================
+      # DOWNLOAD VIDEO + THUMBNAIL
+      # ==========================================
+      - name: Download selected files
+        if: steps.select.outputs.has_next == 'true'
+        run: |
+          set -e
+
+          VIDEO="${{ steps.select.outputs.video }}"
+          THUMB="${{ steps.select.outputs.thumbnail }}"
+
+          echo "=========================================="
+          echo "DOWNLOADING"
+          echo "=========================================="
+
+          rclone copyto \
+            "${RCLONE_REMOTE}:${VIDEO}" \
+            "work/${VIDEO}" \
+            --progress
+
+          rclone copyto \
+            "${RCLONE_REMOTE}:${THUMB}" \
+            "work/${THUMB}" \
+            --progress
+
+          echo ""
+          echo "Downloaded:"
+
+          ls -lh work/
+
+      # ==========================================
+      # CHECK VIDEO
+      # ==========================================
+      - name: Check video
+        if: steps.select.outputs.has_next == 'true'
+        run: |
+          set -e
+
+          VIDEO="work/${{ steps.select.outputs.video }}"
+
+          echo "=========================================="
+          echo "VIDEO INFORMATION"
+          echo "=========================================="
+
+          ffprobe \
+            -hide_banner \
+            -v error \
+            -show_entries \
+            format=duration,size \
+            -of default=noprint_wrappers=1 \
+            "$VIDEO"
+
+      # ==========================================
+      # START YOUTUBE LIVE
+      # ==========================================
+      - name: Start YouTube Live
+        if: steps.select.outputs.has_next == 'true'
+        run: |
+          set -e
+
+          VIDEO="work/${{ steps.select.outputs.video }}"
+
+          echo "=========================================="
+          echo "STARTING YOUTUBE LIVE"
+          echo "=========================================="
+
+          echo ""
+          echo "Video:"
+          echo "$VIDEO"
+
+          echo ""
+          echo "Streaming to YouTube..."
+
+          ffmpeg \
+            -hide_banner \
+            -loglevel info \
+            -re \
+            -i "$VIDEO" \
+            -c:v libx264 \
+            -preset veryfast \
+            -tune zerolatency \
+            -pix_fmt yuv420p \
+            -r 30 \
+            -g 60 \
+            -keyint_min 60 \
+            -b:v 4500k \
+            -maxrate 4500k \
+            -bufsize 9000k \
+            -c:a aac \
+            -b:a 128k \
+            -ar 44100 \
+            -f flv \
+            "rtmps://a.rtmps.youtube.com/live2/${YOUTUBE_STREAM_KEY}"
+
+      # ==========================================
+      # MARK AS LIVE
+      # ==========================================
+      - name: Mark video as already live
+        if: success() && steps.select.outputs.has_next == 'true'
+        run: |
+          set -e
+
+          NUMBER="${{ steps.select.outputs.number }}"
+
+          echo "=========================================="
+          echo "LIVE SUCCESS"
+          echo "=========================================="
+
+          echo "Number: $NUMBER"
+
+          # Prevent duplicates
+          if ! grep -Fxq "$NUMBER" already_live.txt; then
+            echo "$NUMBER" >> already_live.txt
+          fi
+
+          # Numeric sort
+          sort -n -o already_live.txt already_live.txt
+
+          echo ""
+          echo "Updated already_live.txt:"
+          cat already_live.txt
+
+      # ==========================================
+      # COMMIT RECORD
+      # ==========================================
+      - name: Commit already live record
+        if: success() && steps.select.outputs.has_next == 'true'
+        run: |
+          set -e
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add already_live.txt
+
+          if git diff --cached --quiet; then
+            echo "Nothing to commit."
+          else
+
+            git commit \
+              -m "Mark ${{ steps.select.outputs.number }} as already live"
+
+            git push
+
+          fi
+
+      # ==========================================
+      # SUMMARY
+      # ==========================================
+      - name: Final summary
+        if: always()
+        run: |
+          echo ""
+          echo "=================================================="
+          echo "FINAL SUMMARY"
+          echo "=================================================="
+
+          if [ "${{ steps.select.outputs.has_next }}" = "true" ]; then
+            echo "Selected   : ${{ steps.select.outputs.number }}"
+            echo "Video      : ${{ steps.select.outputs.video }}"
+            echo "Thumbnail  : ${{ steps.select.outputs.thumbnail }}"
+          else
+            echo "Selected   : NONE"
+          fi
+
+          echo ""
+          echo "Already Live:"
+          cat already_live.txt || true
+
+          echo "=================================================="
