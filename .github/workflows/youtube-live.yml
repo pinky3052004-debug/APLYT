@@ -11,7 +11,7 @@ jobs:
       contents: write
 
     env:
-      RCLONE_REMOTE: NanNanDrive
+      RCLONE_REMOTE: mydrive
       GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
       YOUTUBE_STREAM_KEY: ${{ secrets.YOUTUBE_STREAM_KEY }}
 
