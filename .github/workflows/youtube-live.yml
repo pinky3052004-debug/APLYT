@@ -44,7 +44,8 @@ jobs:
             ffmpeg \
             curl \
             jq \
-            unzip
+            unzip \
+            python3-pip
 
           curl https://rclone.org/install.sh | sudo bash
 
@@ -55,6 +56,10 @@ jobs:
           echo ""
           echo "ffmpeg:"
           ffmpeg -version | head -n 1
+
+          echo ""
+          echo "Python packages:"
+          pip3 install --no-cache-dir google-api-python-client google-auth-oauthlib
 
       # ============================================================
       # RESTORE RCLONE CONFIG
@@ -189,11 +194,6 @@ jobs:
           echo "FINDING NEXT VIDEO"
           echo "=========================================="
 
-          # --------------------------------------------------------
-          # Get IDs from main.json
-          # Sort numerically
-          # --------------------------------------------------------
-
           jq -r '.[].id' work/main.json \
             | sort -n \
             > work/all_ids.txt
@@ -201,10 +201,6 @@ jobs:
           echo ""
           echo "IDs in main.json:"
           cat work/all_ids.txt
-
-          # --------------------------------------------------------
-          # Find first ID that is NOT already live
-          # --------------------------------------------------------
 
           NEXT_ID=""
 
@@ -219,10 +215,6 @@ jobs:
 
           done < work/all_ids.txt
 
-          # --------------------------------------------------------
-          # No more videos
-          # --------------------------------------------------------
-
           if [ -z "$NEXT_ID" ]; then
 
             echo ""
@@ -236,29 +228,16 @@ jobs:
 
           fi
 
-          # --------------------------------------------------------
-          # Convert ID to 5 digits
-          #
-          # 1 -> 00001
-          # 2 -> 00002
-          # 10 -> 00010
-          # 100 -> 00100
-          # --------------------------------------------------------
-
           PADDED_ID="$(printf '%05d' "$NEXT_ID")"
 
           VIDEO_FILE="${PADDED_ID}.mp4"
           THUMB_FILE="${PADDED_ID}.jpg"
 
           echo ""
-          echo "Selected ID       : $NEXT_ID"
-          echo "Padded ID         : $PADDED_ID"
-          echo "Video             : $VIDEO_FILE"
-          echo "Thumbnail         : $THUMB_FILE"
-
-          # --------------------------------------------------------
-          # Read metadata from main.json
-          # --------------------------------------------------------
+          echo "Selected ID     : $NEXT_ID"
+          echo "Padded ID       : $PADDED_ID"
+          echo "Video           : $VIDEO_FILE"
+          echo "Thumbnail       : $THUMB_FILE"
 
           TITLE="$(jq -r \
             --arg id "$NEXT_ID" \
@@ -275,10 +254,6 @@ jobs:
             '.[] | select(.id == $id) | .video_tags' \
             work/main.json)"
 
-          # --------------------------------------------------------
-          # Check metadata
-          # --------------------------------------------------------
-
           if [ -z "$TITLE" ] || [ "$TITLE" = "null" ]; then
             echo "ERROR: title not found for id $NEXT_ID"
             exit 1
@@ -294,10 +269,6 @@ jobs:
             exit 1
           fi
 
-          # --------------------------------------------------------
-          # Save metadata
-          # --------------------------------------------------------
-
           printf '%s' "$TITLE" \
             > work/title.txt
 
@@ -307,27 +278,6 @@ jobs:
           printf '%s' "$TAGS_JSON" \
             > work/tags.json
 
-          echo ""
-          echo "=========================================="
-          echo "METADATA"
-          echo "=========================================="
-
-          echo ""
-          echo "TITLE:"
-          cat work/title.txt
-
-          echo ""
-          echo "DESCRIPTION:"
-          cat work/description.txt
-
-          echo ""
-          echo "TAGS:"
-          cat work/tags.json
-
-          # --------------------------------------------------------
-          # Outputs
-          # --------------------------------------------------------
-
           echo "has_next=true" >> "$GITHUB_OUTPUT"
           echo "id=$NEXT_ID" >> "$GITHUB_OUTPUT"
           echo "padded_id=$PADDED_ID" >> "$GITHUB_OUTPUT"
@@ -335,7 +285,7 @@ jobs:
           echo "thumbnail=$THUMB_FILE" >> "$GITHUB_OUTPUT"
 
       # ============================================================
-      # CHECK FILES IN GOOGLE DRIVE
+      # CHECK SELECTED FILES IN GOOGLE DRIVE
       # ============================================================
 
       - name: Check selected files
@@ -350,9 +300,6 @@ jobs:
           echo "CHECKING GOOGLE DRIVE FILES"
           echo "=========================================="
 
-          echo ""
-          echo "Video: $VIDEO"
-
           if ! rclone lsf \
             "${RCLONE_REMOTE}:" \
             --drive-root-folder-id "$GOOGLE_DRIVE_FOLDER_ID" \
@@ -361,14 +308,8 @@ jobs:
             | grep -Fxq "$VIDEO"; then
 
             echo "ERROR: $VIDEO not found in Google Drive."
-
             exit 1
           fi
-
-          echo "Video found."
-
-          echo ""
-          echo "Thumbnail: $THUMB"
 
           if ! rclone lsf \
             "${RCLONE_REMOTE}:" \
@@ -378,25 +319,25 @@ jobs:
             | grep -Fxq "$THUMB"; then
 
             echo "ERROR: $THUMB not found in Google Drive."
-
             exit 1
           fi
 
-          echo "Thumbnail found."
+          echo "Files verified successfully."
 
       # ============================================================
-      # DOWNLOAD VIDEO
+      # DOWNLOAD VIDEO & THUMBNAIL
       # ============================================================
 
-      - name: Download video
+      - name: Download video and thumbnail
         if: steps.select.outputs.has_next == 'true'
         run: |
           set -e
 
           VIDEO="${{ steps.select.outputs.video }}"
+          THUMB="${{ steps.select.outputs.thumbnail }}"
 
           echo "=========================================="
-          echo "DOWNLOADING VIDEO"
+          echo "DOWNLOADING ASSETS"
           echo "=========================================="
 
           rclone copyto \
@@ -405,65 +346,113 @@ jobs:
             --drive-root-folder-id "$GOOGLE_DRIVE_FOLDER_ID" \
             --progress
 
-          if [ ! -f "work/${VIDEO}" ]; then
-            echo "ERROR: Video download failed."
-            exit 1
-          fi
-
-          echo ""
-          ls -lh "work/${VIDEO}"
-
-      # ============================================================
-      # DOWNLOAD THUMBNAIL
-      # ============================================================
-
-      - name: Download thumbnail
-        if: steps.select.outputs.has_next == 'true'
-        run: |
-          set -e
-
-          THUMB="${{ steps.select.outputs.thumbnail }}"
-
-          echo "=========================================="
-          echo "DOWNLOADING THUMBNAIL"
-          echo "=========================================="
-
           rclone copyto \
             "${RCLONE_REMOTE}:${THUMB}" \
             "work/${THUMB}" \
             --drive-root-folder-id "$GOOGLE_DRIVE_FOLDER_ID" \
             --progress
 
-          if [ ! -f "work/${THUMB}" ]; then
-            echo "ERROR: Thumbnail download failed."
-            exit 1
-          fi
-
-          echo ""
-          ls -lh "work/${THUMB}"
-
       # ============================================================
-      # CHECK VIDEO
+      # UPDATE YOUTUBE METADATA & THUMBNAIL VIA API
       # ============================================================
 
-      - name: Check video
+      - name: Update YouTube Metadata and Thumbnail
         if: steps.select.outputs.has_next == 'true'
+        env:
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+          YOUTUBE_BROADCAST_ID: ${{ secrets.YOUTUBE_BROADCAST_ID }}
+          NEXT_ID: ${{ steps.select.outputs.id }}
         run: |
           set -e
 
-          VIDEO="work/${{ steps.select.outputs.video }}"
-
           echo "=========================================="
-          echo "VIDEO INFORMATION"
+          echo "UPDATING YOUTUBE METADATA VIA API"
           echo "=========================================="
 
-          ffprobe \
-            -hide_banner \
-            -v error \
-            -show_entries \
-            format=duration,size \
-            -of default=noprint_wrappers=1 \
-            "$VIDEO"
+          python3 - << 'EOF'
+          import os
+          import json
+          from google.oauth2.credentials import Credentials
+          from googleapiclient.discovery import build
+          from googleapiclient.http import MediaFileUpload
+
+          client_id = os.environ.get("YOUTUBE_CLIENT_ID")
+          client_secret = os.environ.get("YOUTUBE_CLIENT_SECRET")
+          refresh_token = os.environ.get("YOUTUBE_REFRESH_TOKEN")
+          broadcast_id = os.environ.get("YOUTUBE_BROADCAST_ID")
+          next_id = os.environ.get("NEXT_ID")
+
+          with open("work/main.json", "r", encoding="utf-8") as f:
+              data = json.load(f)
+
+          video_item = None
+          for item in data:
+              if str(item.get("id")) == str(next_id):
+                  video_item = item
+                  break
+
+          if not video_item:
+              print(f"Error: ID {next_id} not found in main.json")
+              exit(1)
+
+          title = video_item.get("title")
+          description = video_item.get("description")
+          tags = video_item.get("video_tags", [])
+
+          creds = Credentials(
+              None,
+              refresh_token=refresh_token,
+              client_id=client_id,
+              client_secret=client_secret,
+              token_uri="https://oauth2.googleapis.com/token"
+          )
+
+          youtube = build("youtube", "v3", credentials=creds)
+
+          # Update Title & Description
+          youtube.liveBroadcasts().update(
+              part="snippet",
+              body={
+                  "id": broadcast_id,
+                  "snippet": {
+                      "title": title,
+                      "description": description
+                  }
+              }
+          ).execute()
+          print("Broadcast metadata updated.")
+
+          # Update Tags
+          try:
+              youtube.videos().update(
+                  part="snippet",
+                  body={
+                      "id": broadcast_id,
+                      "snippet": {
+                          "title": title,
+                          "description": description,
+                          "categoryId": "24",
+                          "tags": tags
+                      }
+                  }
+              ).execute()
+              print("Video tags updated.")
+          except Exception as e:
+              print(f"Warning: Tags update failed: {e}")
+
+          # Update Thumbnail
+          padded_id = f"{int(next_id):05d}"
+          thumb_path = f"work/{padded_id}.jpg"
+
+          if os.path.exists(thumb_path):
+              youtube.thumbnails().set(
+                  videoId=broadcast_id,
+                  media_body=MediaFileUpload(thumb_path)
+              ).execute()
+              print("Thumbnail uploaded.")
+          EOF
 
       # ============================================================
       # START YOUTUBE LIVE
@@ -477,24 +466,7 @@ jobs:
           VIDEO="work/${{ steps.select.outputs.video }}"
 
           echo "=========================================="
-          echo "STARTING YOUTUBE LIVE"
-          echo "=========================================="
-
-          echo ""
-          echo "ID:"
-          echo "${{ steps.select.outputs.id }}"
-
-          echo ""
-          echo "Video:"
-          echo "$VIDEO"
-
-          echo ""
-          echo "Title:"
-          cat work/title.txt
-
-          echo ""
-          echo "=========================================="
-          echo "STREAMING"
+          echo "STARTING YOUTUBE LIVE STREAM"
           echo "=========================================="
 
           ffmpeg \
@@ -519,7 +491,7 @@ jobs:
             "rtmps://a.rtmps.youtube.com/live2/${YOUTUBE_STREAM_KEY}"
 
       # ============================================================
-      # MARK AS LIVE
+      # MARK AS LIVE & COMMIT
       # ============================================================
 
       - name: Mark as already live
@@ -529,39 +501,11 @@ jobs:
 
           ID="${{ steps.select.outputs.id }}"
 
-          echo "=========================================="
-          echo "LIVE SUCCESS"
-          echo "=========================================="
-
-          echo "ID: $ID"
-
-          # --------------------------------------------------------
-          # Only write after FFmpeg succeeds
-          # --------------------------------------------------------
-
           if ! grep -Fxq "$ID" already_live.txt; then
             echo "$ID" >> already_live.txt
           fi
 
-          # Numeric sorting
           sort -n -o already_live.txt already_live.txt
-
-          echo ""
-          echo "Updated already_live.txt:"
-          cat already_live.txt
-
-      # ============================================================
-      # COMMIT RECORD
-      # ============================================================
-
-      - name: Commit already live record
-        if: success() && steps.select.outputs.has_next == 'true'
-        run: |
-          set -e
-
-          echo "=========================================="
-          echo "SAVING RECORD TO GITHUB"
-          echo "=========================================="
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -569,16 +513,10 @@ jobs:
           git add already_live.txt
 
           if git diff --cached --quiet; then
-
             echo "Nothing to commit."
-
           else
-
-            git commit \
-              -m "Mark ${{ steps.select.outputs.id }} as already live"
-
+            git commit -m "Mark ${{ steps.select.outputs.id }} as already live"
             git push
-
           fi
 
       # ============================================================
@@ -594,23 +532,14 @@ jobs:
           echo "=================================================="
 
           if [ "${{ steps.select.outputs.has_next }}" = "true" ]; then
-
-            echo "ID          : ${{ steps.select.outputs.id }}"
-            echo "Video       : ${{ steps.select.outputs.video }}"
-            echo "Thumbnail   : ${{ steps.select.outputs.thumbnail }}"
-
-            echo ""
-            echo "Title:"
-            cat work/title.txt 2>/dev/null || true
-
+            echo "ID        : ${{ steps.select.outputs.id }}"
+            echo "Video     : ${{ steps.select.outputs.video }}"
+            echo "Thumbnail : ${{ steps.select.outputs.thumbnail }}"
           else
-
             echo "No video selected."
-
           fi
 
           echo ""
           echo "Already Live:"
           cat already_live.txt || true
-
           echo "=================================================="
