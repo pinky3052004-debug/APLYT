@@ -455,7 +455,7 @@ jobs:
           EOF
 
       # ============================================================
-      # START YOUTUBE LIVE
+      # START YOUTUBE LIVE (LOOPED 6 TIMES)
       # ============================================================
 
       - name: Start YouTube Live
@@ -466,13 +466,14 @@ jobs:
           VIDEO="work/${{ steps.select.outputs.video }}"
 
           echo "=========================================="
-          echo "STARTING YOUTUBE LIVE STREAM"
+          echo "STARTING YOUTUBE LIVE STREAM (LOOP 6 TIMES)"
           echo "=========================================="
 
           ffmpeg \
             -hide_banner \
             -loglevel info \
             -re \
+            -stream_loop 5 \
             -i "$VIDEO" \
             -c:v libx264 \
             -preset veryfast \
