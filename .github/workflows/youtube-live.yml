@@ -466,14 +466,14 @@ jobs:
           VIDEO="work/${{ steps.select.outputs.video }}"
 
           echo "=========================================="
-          echo "STARTING YOUTUBE LIVE STREAM (LOOP 6 TIMES)"
+          echo "STARTING YOUTUBE LIVE STREAM (LOOP 5 TIMES)"
           echo "=========================================="
 
           ffmpeg \
             -hide_banner \
             -loglevel info \
             -re \
-            -stream_loop 5 \
+            -stream_loop 4 \
             -i "$VIDEO" \
             -c:v libx264 \
             -preset veryfast \
