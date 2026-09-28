@@ -37,31 +37,35 @@ def create_or_update_broadcast():
     
     youtube = build("youtube", "v3", credentials=creds)
     
-    # 1. YouTube Live Broadcast အသစ်ဖန်တီးခြင်း (Insert)
-    print("Creating new YouTube Live Broadcast...")
+    # YouTube Live Broadcast အသစ် ဖန်တီးခြင်း
+    print("YouTube Live Broadcast အသစ် ဖန်တီးနေပါသည်...")
     broadcast_request = youtube.liveBroadcasts().insert(
         part="snippet,status",
         body={
             "snippet": {
                 "title": title,
                 "description": description,
-                "scheduledStartTime": "2026-09-22T00:00:00Z" # လိုအပ်ပါက သတ်မှတ်နိုင်သည် (သို့မဟုတ် လက်ရှိအချိန်)
+                "scheduledStartTime": "2026-09-22T00:00:00Z"
             },
             "status": {
-                "privacyStatus": "public", # public, unlisted သို့မဟုတ် private
+                "privacyStatus": "public",
                 "selfDeclaredMadeForKids": False
             }
         }
     )
     broadcast_response = broadcast_request.execute()
     broadcast_id = broadcast_response["id"]
-    print(f"Successfully created Broadcast ID: {broadcast_id}")
     
-    # 2. Stream Key ကို Broadcast နဲ့ ချိတ်ဆက်ပေးခြင်း (Bind)
-    # မှတ်ချက် - သင့်အကောင့်တွင် bound လုပ်ရန် Stream တစ်ခုရှိရပါမည်။ 
-    # အကယ်၍ Stream Key တစ်ခုတည်းကို အမြဲသုံးချင်ပါက Bind လုပ်စရာမလိုဘဲ Video ID ကိုသာ သုံးနိုင်ပါသည်။
+    # Broadcast ID ကို text ဖိုင်ထဲသို့ သိမ်းဆည်းပေးခြင်း (FFmpeg အတွက် သုံးရန်)
+    with open("broadcast_id.txt", "w") as b_file:
+        b_file.write(broadcast_id)
+
+    print("--------------------------------------------------")
+    print(f"🎉 YouTube Live Broadcast အောင်မြင်စွာ ဖန်တီးပြီးပါပြီ!")
+    print(f"📌 ထွက်ရှိလာသော Broadcast ID မှာ: {broadcast_id} ဖြစ်ပါသည်။")
+    print("--------------------------------------------------")
     
-    # 3. Tags များကို Update လုပ်ခြင်း
+    # Tags များကို Update လုပ်ခြင်း
     try:
         youtube.videos().update(
             part="snippet",
@@ -75,21 +79,21 @@ def create_or_update_broadcast():
                 }
             }
         ).execute()
-        print("Video tags updated.")
+        print("✅ ဗီဒီယို Tags များကို အောင်မြင်စွာ Update လုပ်ပြီးပါပြီ။")
     except Exception as e:
-        print(f"Warning: Tags update failed: {e}")
+        print(f"⚠️ သတိပေးချက် - Tags Update လုပ်၍မရပါ: {e}")
 
-    # 4. Thumbnail တင်ခြင်း
+    # Thumbnail တင်ခြင်း
     padded_id = f"{int(next_id):05d}"
     thumb_path = f"work/{padded_id}.jpg"
     
     if os.path.exists(thumb_path):
-        print(f"Uploading thumbnail for broadcast {broadcast_id}...")
+        print(f"🖼️ Broadcast ID ({broadcast_id}) အတွက် Thumbnail တင်နေပါသည်...")
         youtube.thumbnails().set(
             videoId=broadcast_id,
             media_body=MediaFileUpload(thumb_path)
         ).execute()
-        print("Thumbnail uploaded successfully.")
+        print("✅ Thumbnail တင်ခြင်း အောင်မြင်ပါသည်။")
 
 if __name__ == "__main__":
     create_or_update_broadcast()
