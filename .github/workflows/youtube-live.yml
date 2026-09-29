@@ -353,27 +353,27 @@ jobs:
             --progress
 
       # ============================================================
-      # CREATE NEW YOUTUBE BROADCAST & UPDATE METADATA/THUMBNAIL
+      # UPDATE YOUTUBE METADATA & THUMBNAIL VIA API
       # ============================================================
 
-      - name: Create Broadcast and Update YouTube Metadata
+      - name: Update YouTube Metadata and Thumbnail
         if: steps.select.outputs.has_next == 'true'
         env:
           YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+          YOUTUBE_BROADCAST_ID: ${{ secrets.YOUTUBE_BROADCAST_ID }}
           NEXT_ID: ${{ steps.select.outputs.id }}
         run: |
           set -e
 
           echo "=========================================="
-          echo "CREATING NEW BROADCAST & UPDATING VIA API"
+          echo "UPDATING YOUTUBE METADATA VIA API"
           echo "=========================================="
 
           python3 - << 'EOF'
           import os
           import json
-          from datetime import datetime, timedelta, timezone
           from google.oauth2.credentials import Credentials
           from googleapiclient.discovery import build
           from googleapiclient.http import MediaFileUpload
@@ -381,6 +381,7 @@ jobs:
           client_id = os.environ.get("YOUTUBE_CLIENT_ID")
           client_secret = os.environ.get("YOUTUBE_CLIENT_SECRET")
           refresh_token = os.environ.get("YOUTUBE_REFRESH_TOKEN")
+          broadcast_id = os.environ.get("YOUTUBE_BROADCAST_ID")
           next_id = os.environ.get("NEXT_ID")
 
           with open("work/main.json", "r", encoding="utf-8") as f:
@@ -410,31 +411,20 @@ jobs:
 
           youtube = build("youtube", "v3", credentials=creds)
 
-          # လက်ရှိအချိန်ထက် ၁၀ မိနစ်ခန့် ပိုစော/ပိုနောက်ကျပြီး အနာဂတ်အချိန်ကို အလိုအလျောက် တွက်ချက်ခြင်း
-          future_time = datetime.now(timezone.utc) + timedelta(minutes=10)
-          scheduled_start = future_time.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-          print(f"YouTube Live Broadcast အသစ် ဖန်တီးနေပါသည် (Scheduled Time: {scheduled_start})...")
-          broadcast_request = youtube.liveBroadcasts().insert(
-              part="snippet,status",
+          # Update Title & Description
+          youtube.liveBroadcasts().update(
+              part="snippet",
               body={
+                  "id": broadcast_id,
                   "snippet": {
                       "title": title,
-                      "description": description,
-                      "scheduledStartTime": scheduled_start
-                  },
-                  "status": {
-                      "privacyStatus": "public",
-                      "selfDeclaredMadeForKids": False
+                      "description": description
                   }
               }
-          )
-          broadcast_response = broadcast_request.execute()
-          broadcast_id = broadcast_response["id"]
+          ).execute()
+          print("Broadcast metadata updated.")
 
-          print(f"🎉 Broadcast အသစ် ဖန်တီးပြီးပါပြီ။ ID: {broadcast_id}")
-
-          # Tags များကို Update လုပ်ခြင်း
+          # Update Tags
           try:
               youtube.videos().update(
                   part="snippet",
@@ -448,21 +438,20 @@ jobs:
                       }
                   }
               ).execute()
-              print("✅ ဗီဒီယို Tags များကို Update လုပ်ပြီးပါပြီ။")
+              print("Video tags updated.")
           except Exception as e:
-              print(f"⚠️ သတိပေးချက် - Tags Update ၍မရပါ: {e}")
+              print(f"Warning: Tags update failed: {e}")
 
-          # Thumbnail တင်ခြင်း
+          # Update Thumbnail
           padded_id = f"{int(next_id):05d}"
           thumb_path = f"work/{padded_id}.jpg"
 
           if os.path.exists(thumb_path):
-              print(f"🖼️ Thumbnail တင်နေပါသည်...")
               youtube.thumbnails().set(
                   videoId=broadcast_id,
                   media_body=MediaFileUpload(thumb_path)
               ).execute()
-              print("✅ Thumbnail တင်ခြင်း အောင်မြင်ပါသည်။")
+              print("Thumbnail uploaded.")
           EOF
 
       # ============================================================
@@ -477,14 +466,13 @@ jobs:
           VIDEO="work/${{ steps.select.outputs.video }}"
 
           echo "=========================================="
-          echo "STARTING YOUTUBE LIVE STREAM (LOOP 5 TIMES)"
+          echo "STARTING YOUTUBE LIVE STREAM"
           echo "=========================================="
 
           ffmpeg \
             -hide_banner \
             -loglevel info \
             -re \
-            -stream_loop 4 \
             -i "$VIDEO" \
             -c:v libx264 \
             -preset veryfast \
